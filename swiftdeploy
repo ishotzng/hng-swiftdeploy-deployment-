@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import time
+import socket
+import subprocess
+import urllib.request
+import yaml
+
+MANIFEST = "manifest.yaml"
+NGINX_CONF = "nginx.conf"
+COMPOSE_FILE = "docker-compose.yml"
+
+
+def run(cmd, check=True):
+    print(f"$ {' '.join(cmd)}")
+    return subprocess.run(cmd, check=check)
+
+
+def load_manifest():
+    if not os.path.exists(MANIFEST):
+        raise Exception("manifest.yaml does not exist")
+
+    with open(MANIFEST, "r") as f:
+        data = yaml.safe_load(f)
+
+    if not isinstance(data, dict):
+        raise Exception("manifest.yaml is not valid YAML")
+
+    return data
+
+
+def save_manifest(data):
+    with open(MANIFEST, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+
+
+def required(data, path):
+    current = data
+    for item in path.split("."):
+        if item not in current or current[item] in [None, ""]:
+            raise Exception(f"Missing required field: {path}")
+        current = current[item]
+
+
+def render_template(template_path, output_path, values):
+    with open(template_path, "r") as f:
+        content = f.read()
+
+    for key, value in values.items():
+        content = content.replace("{{" + key + "}}", str(value))
+
+    with open(output_path, "w") as f:
+        f.write(content)
+
+
+def build_values(data):
+    return {
+        "SERVICE_IMAGE": data["services"]["image"],
+        "APP_PORT": data["services"]["port"],
+        "MODE": data["services"].get("mode", "stable"),
+        "APP_VERSION": data["services"].get("version", "1.0.0"),
+        "RESTART_POLICY": data["services"].get("restart_policy", "unless-stopped"),
+        "NGINX_IMAGE": data["nginx"]["image"],
+        "NGINX_PORT": data["nginx"]["port"],
+        "PROXY_TIMEOUT": data["nginx"].get("proxy_timeout", 10),
+        "CONTACT": data["nginx"].get("contact", "support@swiftdeploy.local"),
+        "NETWORK_NAME": data["network"]["name"],
+        "NETWORK_DRIVER": data["network"]["driver_type"],
+    }
+
+
+def init():
+    data = load_manifest()
+
+    for field in [
+        "services.image",
+        "services.port",
+        "nginx.image",
+        "nginx.port",
+        "network.name",
+        "network.driver_type",
+    ]:
+        required(data, field)
+
+    values = build_values(data)
+
+    render_template("templates/nginx.conf.tpl", NGINX_CONF, values)
+    render_template("templates/docker-compose.yml.tpl", COMPOSE_FILE, values)
+
+    print("Generated nginx.conf")
+    print("Generated docker-compose.yml")
+
+
+def port_is_free(port):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    result = sock.connect_ex(("127.0.0.1", int(port)))
+    sock.close()
+    return result != 0
+
+
+def docker_image_exists(image):
+    result = subprocess.run(
+        ["docker", "image", "inspect", image],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    return result.returncode == 0
+
+
+def nginx_syntax_valid():
+    if not os.path.exists(NGINX_CONF):
+        init()
+
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--add-host",
+            "swiftdeploy-app:127.0.0.1",
+            "-v",
+            f"{os.getcwd()}/nginx.conf:/etc/nginx/nginx.conf:ro",
+            "nginx:latest",
+            "nginx",
+            "-t"
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    print(result.stdout)
+    print(result.stderr)
+
+    return result.returncode == 0
+
+
+def validate():
+    failed = False
+
+    def check(name, condition):
+        nonlocal failed
+        if condition:
+            print(f"PASS: {name}")
+        else:
+            print(f"FAIL: {name}")
+            failed = True
+
+    try:
+        data = load_manifest()
+        check("manifest.yaml exists and is valid YAML", True)
+    except Exception as e:
+        print(f"FAIL: manifest.yaml exists and is valid YAML, {e}")
+        sys.exit(1)
+
+    try:
+        for field in [
+            "services.image",
+            "services.port",
+            "nginx.image",
+            "nginx.port",
+            "network.name",
+            "network.driver_type",
+        ]:
+            required(data, field)
+
+        check("all required fields are present and non-empty", True)
+    except Exception as e:
+        check(f"all required fields are present and non-empty, {e}", False)
+
+    check(
+        "Docker image referenced in manifest exists locally",
+        docker_image_exists(data["services"]["image"])
+    )
+
+    check(
+        "Nginx port is not already bound on the host",
+        port_is_free(data["nginx"]["port"])
+    )
+
+    check(
+        "generated nginx.conf is syntactically valid",
+        nginx_syntax_valid()
+    )
+
+    if failed:
+        sys.exit(1)
+
+    print("All validation checks passed.")
+
+
+def deploy():
+    init()
+
+    run(["docker", "compose", "up", "-d"])
+
+    data = load_manifest()
+    port = data["nginx"]["port"]
+
+    print("Waiting for health checks...")
+
+    start = time.time()
+
+    while time.time() - start < 60:
+        try:
+            with urllib.request.urlopen(f"http://localhost:{port}/healthz", timeout=5) as response:
+                body = response.read().decode()
+                print(body)
+                print("Deployment healthy.")
+                return
+        except Exception:
+            time.sleep(3)
+
+    print("Deployment failed health check within 60 seconds.")
+    sys.exit(1)
+
+
+def promote(mode):
+    if mode not in ["stable", "canary"]:
+        print("Usage: ./swiftdeploy promote [stable|canary]")
+        sys.exit(1)
+
+    data = load_manifest()
+    data["services"]["mode"] = mode
+    save_manifest(data)
+
+    init()
+
+    run(["docker", "compose", "up", "-d", "--no-deps", "--force-recreate", "app"])
+
+    port = data["nginx"]["port"]
+
+    print(f"Waiting for {mode} mode confirmation...")
+
+    start = time.time()
+
+    while time.time() - start < 60:
+        try:
+            with urllib.request.urlopen(f"http://localhost:{port}/healthz", timeout=5) as response:
+                body = response.read().decode()
+                print(body)
+
+                cleaned_body = body.replace(" ", "")
+
+                if f'"mode":"{mode}"' in cleaned_body:
+                    print(f"Promotion to {mode} confirmed.")
+                    return
+        except Exception:
+            time.sleep(3)
+
+    print(f"Promotion to {mode} failed.")
+    sys.exit(1)
+
+
+def teardown(clean=False):
+    run(["docker", "compose", "down", "-v", "--remove-orphans"], check=False)
+
+    if clean:
+        for file in [NGINX_CONF, COMPOSE_FILE]:
+            if os.path.exists(file):
+                os.remove(file)
+                print(f"Deleted {file}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: ./swiftdeploy [init|validate|deploy|promote|teardown]")
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+
+    if cmd == "init":
+        init()
+
+    elif cmd == "validate":
+        validate()
+
+    elif cmd == "deploy":
+        deploy()
+
+    elif cmd == "promote":
+        if len(sys.argv) < 3:
+            print("Usage: ./swiftdeploy promote [stable|canary]")
+            sys.exit(1)
+
+        promote(sys.argv[2])
+
+    elif cmd == "teardown":
+        teardown("--clean" in sys.argv)
+
+    else:
+        print(f"Unknown command: {cmd}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
