@@ -1,0 +1,5 @@
+Checking canary safety policy with OPA...
+Error rate: 0.0%
+P99 latency: 2500.0ms
+FAIL: Promotion blocked by canary safety policy.
+- P99 latency too high: 2500ms

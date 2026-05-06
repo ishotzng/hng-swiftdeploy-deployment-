@@ -3,14 +3,19 @@
 import os
 import sys
 import time
+import json
+import shutil
 import socket
 import subprocess
 import urllib.request
 import yaml
+from datetime import datetime, timezone
 
 MANIFEST = "manifest.yaml"
 NGINX_CONF = "nginx.conf"
 COMPOSE_FILE = "docker-compose.yml"
+HISTORY_FILE = "history.jsonl"
+AUDIT_REPORT = "audit_report.md"
 
 
 def run(cmd, check=True):
@@ -137,6 +142,285 @@ def nginx_syntax_valid():
     return result.returncode == 0
 
 
+def query_opa(path, payload):
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "swiftdeploy-net",
+                "curlimages/curl:latest",
+                "-s",
+                "-X",
+                "POST",
+                f"http://swiftdeploy-opa:8181/v1/data/{path}",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                json.dumps(payload)
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode != 0:
+            print(f"OPA query failed: {result.stderr.strip()}")
+            return None
+
+        return json.loads(result.stdout)
+
+    except Exception as e:
+        print(f"OPA unavailable or unreachable: {e}")
+        return None
+
+
+def check_infra_policy():
+    disk_free_gb = shutil.disk_usage("/").free / (1024 ** 3)
+    cpu_load = os.getloadavg()[0]
+
+    payload = {
+        "input": {
+            "disk_free_gb": round(disk_free_gb, 2),
+            "cpu_load": round(cpu_load, 2)
+        }
+    }
+
+    print("Checking infrastructure policy with OPA...")
+    print(f"Disk free: {payload['input']['disk_free_gb']}GB")
+    print(f"CPU load: {payload['input']['cpu_load']}")
+
+    allow = query_opa("infra/allow", payload)
+
+    if allow is None:
+        print("Deployment blocked because OPA could not verify infrastructure safety.")
+        record_history("policy_violation", "infra", payload["input"], ["OPA unavailable"])
+        return False
+
+    if allow.get("result") is True:
+        print("PASS: Infrastructure policy approved deployment.")
+        return True
+
+    reasons = query_opa("infra/reasons", payload)
+    reason_list = reasons.get("result", []) if reasons else []
+
+    print("FAIL: Deployment blocked by infrastructure policy.")
+
+    if reason_list:
+        for reason in reason_list:
+            print(f"- {reason}")
+    else:
+        print("- No policy reason returned by OPA.")
+
+    record_history("policy_violation", "infra", payload["input"], reason_list)
+    return False
+
+
+def scrape_metrics():
+    data = load_manifest()
+    port = data["nginx"]["port"]
+
+    try:
+        with urllib.request.urlopen(f"http://localhost:{port}/metrics", timeout=5) as response:
+            return response.read().decode()
+    except Exception as e:
+        print(f"Could not scrape metrics: {e}")
+        return ""
+
+
+def parse_metrics(metrics_text):
+    request_counts = {}
+    bucket_counts_by_path = {}
+
+    app_mode_value = 0
+    chaos_value = 0
+    uptime = 0
+
+    for line in metrics_text.splitlines():
+        if line.startswith("#") or line.strip() == "":
+            continue
+
+        if line.startswith("app_mode "):
+            app_mode_value = float(line.split()[-1])
+
+        if line.startswith("chaos_active "):
+            chaos_value = float(line.split()[-1])
+
+        if line.startswith("app_uptime_seconds "):
+            uptime = float(line.split()[-1])
+
+        if line.startswith("http_requests_total"):
+            status = extract_label(line, "status_code")
+            path = extract_label(line, "path")
+            value = float(line.split()[-1])
+
+            if path != "/metrics":
+                request_counts[status] = request_counts.get(status, 0) + value
+
+        if line.startswith("http_request_duration_seconds_bucket"):
+            path = extract_label(line, "path")
+            le = extract_label(line, "le")
+            value = float(line.split()[-1])
+
+            if path == "/metrics":
+                continue
+
+            if path not in bucket_counts_by_path:
+                bucket_counts_by_path[path] = {}
+
+            bucket_counts_by_path[path][le] = value
+
+    total_requests = sum(request_counts.values())
+    error_requests = sum(value for status, value in request_counts.items() if status.startswith("5"))
+
+    error_rate = 0
+    if total_requests > 0:
+        error_rate = (error_requests / total_requests) * 100
+
+    p99_latency_ms = calculate_global_p99(bucket_counts_by_path)
+
+    mode = "canary" if app_mode_value == 1 else "stable"
+
+    if chaos_value == 1:
+        chaos_state = "slow"
+    elif chaos_value == 2:
+        chaos_state = "error"
+    else:
+        chaos_state = "none"
+
+    return {
+        "mode": mode,
+        "uptime_seconds": uptime,
+        "error_rate": round(error_rate, 2),
+        "p99_latency_ms": round(p99_latency_ms, 2),
+        "chaos_state": chaos_state,
+        "total_requests": int(total_requests)
+    }
+
+
+def extract_label(line, label):
+    marker = f'{label}="'
+    if marker not in line:
+        return ""
+    start = line.index(marker) + len(marker)
+    end = line.index('"', start)
+    return line[start:end]
+
+
+def calculate_p99_for_path(bucket_counts):
+    if not bucket_counts:
+        return 0
+
+    clean_buckets = []
+
+    for le, count in bucket_counts.items():
+        if le == "+Inf":
+            continue
+        try:
+            clean_buckets.append((float(le), count))
+        except ValueError:
+            continue
+
+    if not clean_buckets:
+        return 0
+
+    clean_buckets.sort(key=lambda item: item[0])
+
+    total = clean_buckets[-1][1]
+
+    if total <= 0:
+        return 0
+
+    target = total * 0.99
+
+    for bucket, count in clean_buckets:
+        if count >= target:
+            return bucket * 1000
+
+    return clean_buckets[-1][0] * 1000
+
+
+def calculate_global_p99(bucket_counts_by_path):
+    if not bucket_counts_by_path:
+        return 0
+
+    p99_values = []
+
+    for path, bucket_counts in bucket_counts_by_path.items():
+        p99 = calculate_p99_for_path(bucket_counts)
+        if p99 > 0:
+            p99_values.append(p99)
+
+    if not p99_values:
+        return 0
+
+    return max(p99_values)
+
+
+def check_canary_policy():
+    print("Checking canary safety policy with OPA...")
+
+    metrics_text = scrape_metrics()
+
+    if not metrics_text:
+        print("Promotion blocked because metrics could not be scraped.")
+        record_history("policy_violation", "canary", {}, ["Metrics unavailable"])
+        return False
+
+    metrics = parse_metrics(metrics_text)
+
+    payload = {
+        "input": {
+            "error_rate": metrics["error_rate"],
+            "p99_latency_ms": metrics["p99_latency_ms"]
+        }
+    }
+
+    print(f"Error rate: {payload['input']['error_rate']}%")
+    print(f"P99 latency: {payload['input']['p99_latency_ms']}ms")
+
+    allow = query_opa("canary/allow", payload)
+
+    if allow is None:
+        print("Promotion blocked because OPA could not verify canary safety.")
+        record_history("policy_violation", "canary", payload["input"], ["OPA unavailable"])
+        return False
+
+    if allow.get("result") is True:
+        print("PASS: Canary safety policy approved promotion.")
+        return True
+
+    reasons = query_opa("canary/reasons", payload)
+    reason_list = reasons.get("result", []) if reasons else []
+
+    print("FAIL: Promotion blocked by canary safety policy.")
+
+    if reason_list:
+        for reason in reason_list:
+            print(f"- {reason}")
+    else:
+        print("- No policy reason returned by OPA.")
+
+    record_history("policy_violation", "canary", payload["input"], reason_list)
+    return False
+
+
+def record_history(event_type, domain=None, data=None, reasons=None):
+    event = {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "event_type": event_type,
+        "domain": domain,
+        "data": data or {},
+        "reasons": reasons or []
+    }
+
+    with open(HISTORY_FILE, "a") as f:
+        f.write(json.dumps(event) + "\n")
+
+
 def validate():
     failed = False
 
@@ -194,6 +478,9 @@ def validate():
 def deploy():
     init()
 
+    if not check_infra_policy():
+        sys.exit(1)
+
     run(["docker", "compose", "up", "-d"])
 
     data = load_manifest()
@@ -209,17 +496,22 @@ def deploy():
                 body = response.read().decode()
                 print(body)
                 print("Deployment healthy.")
+                record_history("deploy", data["services"].get("mode", "stable"), {"status": "healthy"})
                 return
         except Exception:
             time.sleep(3)
 
     print("Deployment failed health check within 60 seconds.")
+    record_history("deploy_failed", None, {"reason": "health check timeout"})
     sys.exit(1)
 
 
 def promote(mode):
     if mode not in ["stable", "canary"]:
         print("Usage: ./swiftdeploy promote [stable|canary]")
+        sys.exit(1)
+
+    if not check_canary_policy():
         sys.exit(1)
 
     data = load_manifest()
@@ -246,12 +538,89 @@ def promote(mode):
 
                 if f'"mode":"{mode}"' in cleaned_body:
                     print(f"Promotion to {mode} confirmed.")
+                    record_history("promote", mode, {"status": "confirmed"})
                     return
         except Exception:
             time.sleep(3)
 
     print(f"Promotion to {mode} failed.")
+    record_history("promote_failed", mode, {"reason": "mode confirmation timeout"})
     sys.exit(1)
+
+
+def status():
+    try:
+        while True:
+            metrics_text = scrape_metrics()
+            metrics = parse_metrics(metrics_text)
+
+            infra_ok = check_infra_policy()
+            canary_ok = check_canary_policy()
+
+            os.system("clear")
+
+            print("===================================")
+            print("SWIFTDEPLOY STATUS")
+            print("===================================")
+            print(f"Mode: {metrics['mode']}")
+            print(f"Uptime: {int(metrics['uptime_seconds'])}s")
+            print(f"Total Requests: {metrics['total_requests']}")
+            print(f"Error Rate: {metrics['error_rate']}%")
+            print(f"P99 Latency: {metrics['p99_latency_ms']}ms")
+            print(f"Chaos State: {metrics['chaos_state']}")
+            print("")
+            print("Policy Compliance:")
+            print(f"[{'PASS' if infra_ok else 'FAIL'}] Infrastructure Policy")
+            print(f"[{'PASS' if canary_ok else 'FAIL'}] Canary Safety Policy")
+            print("===================================")
+
+            record_history("status_scrape", metrics["mode"], metrics)
+
+            time.sleep(3)
+
+    except KeyboardInterrupt:
+        print("\nStatus stopped.")
+
+
+def audit():
+    events = []
+
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r") as f:
+            for line in f:
+                try:
+                    events.append(json.loads(line))
+                except Exception:
+                    pass
+
+    with open(AUDIT_REPORT, "w") as f:
+        f.write("# SwiftDeploy Audit Report\n\n")
+        f.write("## Timeline\n\n")
+        f.write("| Time | Event | Domain | Details |\n")
+        f.write("|---|---|---|---|\n")
+
+        for event in events:
+            f.write(
+                f"| {event.get('timestamp', '')} "
+                f"| {event.get('event_type', '')} "
+                f"| {event.get('domain', '')} "
+                f"| {json.dumps(event.get('data', {}))} |\n"
+            )
+
+        f.write("\n## Policy Violations\n\n")
+        f.write("| Time | Domain | Reasons |\n")
+        f.write("|---|---|---|\n")
+
+        for event in events:
+            if event.get("event_type") == "policy_violation":
+                reasons = ", ".join(event.get("reasons", []))
+                f.write(
+                    f"| {event.get('timestamp', '')} "
+                    f"| {event.get('domain', '')} "
+                    f"| {reasons} |\n"
+                )
+
+    print(f"Generated {AUDIT_REPORT}")
 
 
 def teardown(clean=False):
@@ -266,7 +635,7 @@ def teardown(clean=False):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ./swiftdeploy [init|validate|deploy|promote|teardown]")
+        print("Usage: ./swiftdeploy [init|validate|deploy|promote|status|audit|teardown]")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -286,6 +655,12 @@ def main():
             sys.exit(1)
 
         promote(sys.argv[2])
+
+    elif cmd == "status":
+        status()
+
+    elif cmd == "audit":
+        audit()
 
     elif cmd == "teardown":
         teardown("--clean" in sys.argv)

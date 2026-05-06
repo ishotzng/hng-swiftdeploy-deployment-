@@ -1,0 +1,16 @@
+ Container swiftdeploy-app Running 
+ Container swiftdeploy-nginx Running 
+ Container swiftdeploy-opa Running 
+ Container swiftdeploy-app Waiting 
+ Container swiftdeploy-app Healthy 
+Generated nginx.conf
+Generated docker-compose.yml
+Checking infrastructure policy with OPA...
+Disk free: 14.84GB
+CPU load: 0.08
+PASS: Infrastructure policy approved deployment.
+$ docker compose up -d
+Waiting for health checks...
+{"mode":"stable","status":"ok","uptime_seconds":178}
+
+Deployment healthy.

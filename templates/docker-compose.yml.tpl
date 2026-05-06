@@ -6,6 +6,8 @@ services:
       MODE: "{{MODE}}"
       APP_VERSION: "{{APP_VERSION}}"
       APP_PORT: "{{APP_PORT}}"
+    expose:
+      - "{{APP_PORT}}"
     networks:
       - swiftdeploy-net
     restart: {{RESTART_POLICY}}
@@ -43,6 +45,22 @@ services:
       sh -c "touch /var/log/nginx/access.log &&
              chmod 666 /var/log/nginx/access.log &&
              nginx -g 'daemon off;'"
+
+  opa:
+    image: openpolicyagent/opa:latest
+    container_name: swiftdeploy-opa
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "/policies"
+    volumes:
+      - ./policies:/policies
+    expose:
+      - "8181"
+    networks:
+      - swiftdeploy-net
+    restart: unless-stopped
 
 networks:
   swiftdeploy-net:

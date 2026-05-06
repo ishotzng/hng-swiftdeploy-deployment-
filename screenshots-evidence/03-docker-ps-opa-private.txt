@@ -1,0 +1,4 @@
+CONTAINER ID   IMAGE                        COMMAND                  CREATED             STATUS                   PORTS                                     NAMES
+3204e5c2be2f   swift-deploy-1-node:latest   "python main.py"         3 minutes ago       Up 3 minutes (healthy)   3000/tcp                                  swiftdeploy-app
+6f35cd2919a0   openpolicyagent/opa:latest   "/opa run --server -…"   59 minutes ago      Up 59 minutes            8181/tcp                                  swiftdeploy-opa
+8c550bf7c22f   nginx:latest                 "/docker-entrypoint.…"   About an hour ago   Up About an hour         0.0.0.0:8080->80/tcp, [::]:8080->80/tcp   swiftdeploy-nginx

@@ -1,0 +1,24 @@
+{"timestamp": "2026-05-06T11:44:25Z", "event_type": "promote", "domain": "canary", "data": {"status": "confirmed"}, "reasons": []}
+{"timestamp": "2026-05-06T11:46:40Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 136.0, "error_rate": 0.0, "p99_latency_ms": 5.0, "chaos_state": "none", "total_requests": 19}, "reasons": []}
+{"timestamp": "2026-05-06T11:46:44Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 140.0, "error_rate": 0.0, "p99_latency_ms": 5.0, "chaos_state": "none", "total_requests": 21}, "reasons": []}
+{"timestamp": "2026-05-06T11:46:47Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 144.0, "error_rate": 0.0, "p99_latency_ms": 5.0, "chaos_state": "none", "total_requests": 23}, "reasons": []}
+{"timestamp": "2026-05-06T11:46:51Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 148.0, "error_rate": 0.0, "p99_latency_ms": 5.0, "chaos_state": "none", "total_requests": 26}, "reasons": []}
+{"timestamp": "2026-05-06T11:46:55Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 151.0, "error_rate": 0.0, "p99_latency_ms": 5.0, "chaos_state": "none", "total_requests": 28}, "reasons": []}
+{"timestamp": "2026-05-06T11:46:59Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 155.0, "error_rate": 0.0, "p99_latency_ms": 5.0, "chaos_state": "none", "total_requests": 30}, "reasons": []}
+{"timestamp": "2026-05-06T11:47:02Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 159.0, "error_rate": 0.0, "p99_latency_ms": 5.0, "chaos_state": "none", "total_requests": 33}, "reasons": []}
+{"timestamp": "2026-05-06T11:47:06Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 163.0, "error_rate": 0.0, "p99_latency_ms": 10.0, "chaos_state": "none", "total_requests": 35}, "reasons": []}
+{"timestamp": "2026-05-06T11:47:10Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 166.0, "error_rate": 0.0, "p99_latency_ms": 10.0, "chaos_state": "none", "total_requests": 37}, "reasons": []}
+{"timestamp": "2026-05-06T11:47:14Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 170.0, "error_rate": 0.0, "p99_latency_ms": 10.0, "chaos_state": "none", "total_requests": 40}, "reasons": []}
+{"timestamp": "2026-05-06T11:47:17Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 174.0, "error_rate": 0.0, "p99_latency_ms": 10.0, "chaos_state": "none", "total_requests": 42}, "reasons": []}
+{"timestamp": "2026-05-06T11:48:55Z", "event_type": "promote", "domain": "stable", "data": {"status": "confirmed"}, "reasons": []}
+{"timestamp": "2026-05-06T11:49:57Z", "event_type": "promote", "domain": "canary", "data": {"status": "confirmed"}, "reasons": []}
+{"timestamp": "2026-05-06T11:56:52Z", "event_type": "policy_violation", "domain": "canary", "data": {"error_rate": 0.0, "p99_latency_ms": 2500.0}, "reasons": ["P99 latency too high: 2500ms"]}
+{"timestamp": "2026-05-06T11:57:42Z", "event_type": "policy_violation", "domain": "canary", "data": {"error_rate": 0.0, "p99_latency_ms": 2500.0}, "reasons": ["P99 latency too high: 2500ms"]}
+{"timestamp": "2026-05-06T11:59:18Z", "event_type": "promote", "domain": "stable", "data": {"status": "confirmed"}, "reasons": []}
+{"timestamp": "2026-05-06T12:02:13Z", "event_type": "deploy", "domain": "stable", "data": {"status": "healthy"}, "reasons": []}
+{"timestamp": "2026-05-06T12:03:12Z", "event_type": "promote", "domain": "canary", "data": {"status": "confirmed"}, "reasons": []}
+{"timestamp": "2026-05-06T12:03:34Z", "event_type": "policy_violation", "domain": "canary", "data": {"error_rate": 0.0, "p99_latency_ms": 2500.0}, "reasons": ["P99 latency too high: 2500ms"]}
+{"timestamp": "2026-05-06T12:04:04Z", "event_type": "policy_violation", "domain": "canary", "data": {"error_rate": 0.0, "p99_latency_ms": 2500.0}, "reasons": ["P99 latency too high: 2500ms"]}
+{"timestamp": "2026-05-06T12:04:04Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 53.0, "error_rate": 0.0, "p99_latency_ms": 2500.0, "chaos_state": "slow", "total_requests": 27}, "reasons": []}
+{"timestamp": "2026-05-06T12:04:23Z", "event_type": "policy_violation", "domain": "canary", "data": {"error_rate": 0.0, "p99_latency_ms": 2500.0}, "reasons": ["P99 latency too high: 2500ms"]}
+{"timestamp": "2026-05-06T12:04:23Z", "event_type": "status_scrape", "domain": "canary", "data": {"mode": "canary", "uptime_seconds": 71.0, "error_rate": 0.0, "p99_latency_ms": 2500.0, "chaos_state": "slow", "total_requests": 28}, "reasons": []}

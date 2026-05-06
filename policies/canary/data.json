@@ -1,0 +1,6 @@
+{
+  "thresholds": {
+    "max_error_rate": 1,
+    "max_latency_ms": 500
+  }
+}
